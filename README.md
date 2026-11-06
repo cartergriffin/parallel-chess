@@ -28,3 +28,7 @@ Different algorithms will face different challenges. There are several overarchi
 
 ### ABDADA
 
+
+## Proposal
+
+The project proposal is in `proposal/`, built from the course IEEE template. Build with `make` (or `pdflatex paper && bibtex paper && pdflatex paper && pdflatex paper`) inside that folder; output is `proposal/paper.pdf`.
