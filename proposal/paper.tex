@@ -4,6 +4,9 @@
 \usepackage[noend]{algpseudocode}
 \usepackage{algorithm}
 \usepackage[margin=1in]{geometry}
+\raggedbottom
+\usepackage{etoolbox}
+\AtBeginEnvironment{algorithmic}{\small}
 
 \begin{document}
 
@@ -23,7 +26,7 @@ Alpha-beta pruning makes minimax game-tree search practical, but its pruning dep
 
 A chess engine selects a move by searching the tree of positions reachable from the current one and scoring the leaves with an evaluation function. Minimax search visits every node to a fixed depth. Alpha-beta pruning skips subtrees that cannot change the result, and with good move ordering it searches roughly the square root of the minimax node count~\cite{knuth1975}. Negamax is the same algorithm written with a single maximizing case, using $\max(a,b) = -\min(-a,-b)$~\cite{knuth1975} (Algorithm~\ref{alg:seq}).
 
-A significant difficulty for parallelism is due a shared alpha-beta state across different tree nodes~\cite{marsland1982}. The window $(\alpha, \beta)$ passed to each child depends on the scores of the children searched before it. Alpha-beta skips moves that can not beat the best move found so far. Searching one at a time, each move benefits from knowledge of its predecessor, but searched in parallel, moves begin before predecessors yield that knowledge, so our total nodes pruned decreases (redundancy increases).
+A significant difficulty for parallelism can be seen in a shared alpha-beta state across different tree nodes~\cite{marsland1982}. The window $(\alpha, \beta)$ passed to each child depends on the scores of the children searched before it. Alpha-beta skips moves that can not beat the best move found so far. Searching one at a time, each move benefits from knowledge of its predecessor, but searched in parallel, moves begin before predecessors yield that knowledge, so our total nodes pruned decreases (redundancy increases).
 
 This project implements four parallel optimizations for the tree search on top of the same base environment:
 
@@ -133,7 +136,7 @@ Seed & Nodes & Time \\
 
 \begin{itemize}
 \item November 15. We intend to move our sequential search from the random tree onto real chess positions and have both root splitting versions working. Each version will be run repeatedly against the sequential result to check for race conditions. Our first speedup and search overhead results will come from these versions and go into the preliminary report due November 19.
-\item November 30. We plan to have the hybrid implemented on the shared work queue. This includes the abort flag for cancelling sibling tasks after a beta cutoff, which we expect to be the hardest part of the implementation.
+\item November 30. We plan to have the hybrid implemented on the shared work queue. This includes the abort flag for cancelling sibling tasks after a beta cutoff, which we expect to be the hardest part of the implementation (and most interesting).
 \item December 6. We intend to have every version measured at each thread count and $D_{split}$ chosen for the hybrid.
 \item December 10. We will submit the final report comparing the speedup, efficiency, and search overhead of all four versions.
 \end{itemize}
