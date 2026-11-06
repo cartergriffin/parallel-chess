@@ -9,7 +9,7 @@
 
 \title{Parallel Alpha-Beta Search for Chess:\\ Root Splitting and a Hybrid Work Queue}
 
-\author{\IEEEauthorblockN{Carter Griffin, Luke [Lname], Bryce Panza}
+\author{\IEEEauthorblockN{Bryce Panza, Carter Griffin, Luke Haddad, Samuel Butler, Marco De La Rosa}
 \IEEEauthorblockA{School of Informatics, Computing \& Cyber Systems\\
 Northern Arizona University, Flagstaff, AZ, U.S.A.}}
 
@@ -23,7 +23,18 @@ Alpha-beta pruning makes minimax game-tree search practical, but its pruning dep
 
 A chess engine selects a move by searching the tree of positions reachable from the current one and scoring the leaves with an evaluation function. Minimax search visits every node to a fixed depth. Alpha-beta pruning skips subtrees that cannot change the result, and with good move ordering it searches roughly the square root of the minimax node count~\cite{knuth1975}. Negamax is the same algorithm written with a single maximizing case, using $\max(a,b) = -\min(-a,-b)$~\cite{knuth1975} (Algorithm~\ref{alg:seq}).
 
-\begin{algorithm}[t]
+A significant difficulty for parallelism is due a shared alpha-beta state across different tree nodes~\cite{marsland1982}. The window $(\alpha, \beta)$ passed to each child depends on the scores of the children searched before it. Alpha-beta skips moves that can not beat the best move found so far. Searching one at a time, each move benefits from knowledge of its predecessor, but searched in parallel, moves begin before predecessors yield that knowledge, so our total nodes pruned decreases (redundancy increases).
+
+This project implements four parallel optimizations for the tree search on top of the same base environment:
+
+\begin{enumerate}
+\item Algorithm~\ref{alg:seq}, one thread. All speedups are reported relative to this version.
+\item The legal moves at the root are dealt round-robin to $T$ threads before the search begins~\cite{marsland1982}. Each thread searches its moves with a private $\alpha$. Results are combined after a join.
+\item Root moves are placed in a shared FIFO queue. Idle threads take the next move. The best score found so far is shared, so moves taken later are searched with a tighter window (Algorithm~\ref{alg:dyn}).
+\item The work queue of version 3 extended below the root. At a node, the first move is searched by the owning thread alone; once it returns a bound, the remaining moves are pushed to the shared queue as tasks. This follows the Young Brothers Wait Concept~\cite{feldmann1989} and reuses the queue from version 3 instead of a per-node split-point structure (Algorithm~\ref{alg:hyb}).
+\end{enumerate}
+
+\begin{algorithm}[H]
 \caption{Sequential negamax with alpha-beta pruning}
 \label{alg:seq}
 \begin{algorithmic}[1]
@@ -40,18 +51,7 @@ A chess engine selects a move by searching the tree of positions reachable from 
 \end{algorithmic}
 \end{algorithm}
 
-A significant difficulty for parallelism is due a shared alpha-beta state across different tree nodes~\cite{marsland1982}. The window $(\alpha, \beta)$ passed to each child depends on the scores of the children searched before it. Alpha-beta skips moves that can not beat the best move found so far. Searching one at a time, each move benefits from knowledge of its predecessor, but searched in parallel, moves begin before predecessors yield that knowledge, so our total nodes pruned decreases (redundancy increases).
-
-This project implements four parallel optimizations for the tree search on top of the same base environment:
-
-\begin{enumerate}
-\item \textbf{Sequential.} Algorithm~\ref{alg:seq}, one thread. All speedups are reported relative to this version.
-\item \textbf{Static root split.} The legal moves at the root are dealt round-robin to $T$ threads before the search begins~\cite{marsland1982}. Each thread searches its moves with a private $\alpha$. Results are combined after a join.
-\item \textbf{Dynamic root split.} Root moves are placed in a shared FIFO queue. Idle threads take the next move. The best score found so far is shared, so moves taken later are searched with a tighter window (Algorithm~\ref{alg:dyn}).
-\item \textbf{Hybrid.} The work queue of version 3 extended below the root. At a node, the first move is searched by the owning thread alone; once it returns a bound, the remaining moves are pushed to the shared queue as tasks. This follows the Young Brothers Wait Concept~\cite{feldmann1989} and reuses the queue from version 3 instead of a per-node split-point structure (Algorithm~\ref{alg:hyb}).
-\end{enumerate}
-
-\begin{algorithm}[t]
+\begin{algorithm}[H]
 \caption{Dynamic root split (worker thread)}
 \label{alg:dyn}
 \begin{algorithmic}[1]
@@ -65,7 +65,7 @@ This project implements four parallel optimizations for the tree search on top o
 \end{algorithmic}
 \end{algorithm}
 
-\begin{algorithm}[t]
+\begin{algorithm}[H]
 \caption{Hybrid split at node $n$ (sketch)}
 \label{alg:hyb}
 \begin{algorithmic}[1]
@@ -85,17 +85,17 @@ This project implements four parallel optimizations for the tree search on top o
 
 The challenges follow from the dependence of each sibling's window on earlier siblings, and each version is affected differently.
 
-\textbf{Search overhead.} Any node searched in parallel is searched with less information than in the sequential order. Static splitting has the most of this, since no thread sees another's $\alpha$. The total node count at $T$ threads, divided by the sequential node count, measures this cost directly.
+Any node searched in parallel is searched with less information than in the sequential order. Static splitting has the most of this, since no thread sees another's $\alpha$. The total node count at $T$ threads, divided by the sequential node count, measures this cost directly.
 
-\textbf{Load imbalance and idle time.} Subtree sizes under different root moves vary by orders of magnitude. The first move in a well-ordered list should be the largest~\cite{knuth1975}. Under a static split, one thread can track most of the work while the others finish early and wait at the join. Comparing the different load balancing techniques available (dynamic, static, guided) will yield interesting results.
+Subtree sizes under different root moves vary by orders of magnitude. The first move in a well-ordered list should be the largest~\cite{knuth1975}. Under a static split, one thread can track most of the work while the others finish early and wait at the join. Comparing the different load balancing techniques available (dynamic, static, guided) will yield interesting results.
 
-\textbf{Limited parallelism at the root.} A typical chess position has about 30 legal moves~\cite{shannon1950}. Root splitting cannot use more threads than root moves, and in practice it is limited by the largest single subtree. This is the motivation for the hybrid.
+A typical chess position has about 30 legal moves~\cite{shannon1950}. Root splitting cannot use more threads than root moves, and in practice it is limited by the largest single subtree. This is the motivation for the hybrid.
 
-\textbf{Synchronization and contention.} Each thread may write to the shared queue and shared $\alpha^{*}$. In the hybrid, task pushes and pops occur at every split node, so the lock on $Q$ is a likely bottleneck. Split depth $D_{split}$ trades task granularity against contention. (add callback to state management discussed in introduction)
+Each thread may write to the shared queue and shared $\alpha^{*}$. In the hybrid, task pushes and pops occur at every split node, so the lock on $Q$ is a likely bottleneck. Split depth $D_{split}$ trades task granularity against contention. (add callback to state management discussed in introduction)
 
-\textbf{Cutoff propagation.} In the hybrid algorithm, a beta cutoff at one child makes the remaining sibling tasks useless (they are already pruned!). Such tasks must be cancelled or abandoned through a flag that running threads can check. It is important to be cautious of lock overuse while approaching this problem, making it an interesting challenge for implementation.
+In the hybrid algorithm, a beta cutoff at one child makes the remaining sibling tasks useless (they are already pruned!). Such tasks must be cancelled or abandoned through a flag that running threads can check. It is important to be cautious of lock overuse while approaching this problem, making it an interesting challenge for implementation.
 
-\textbf{Correctness and nondeterminism.} As with any parallel program, parallel versions of our selected algorithms may visit nodes in different orders across runs. All versions must be tested rigorously for race conditions by running several thousand times each to ensure correctness.
+As with any parallel program, parallel versions of our selected algorithms may visit nodes in different orders across runs. All versions must be tested rigorously for race conditions by running several thousand times each to ensure correctness.
 
 \section{Proposed Solution}
 
@@ -112,7 +112,7 @@ Experiments use a fixed set of test positions in FEN notation~\cite{edwards1994}
 We implemented a basic negamax algorithm to test sequential efficiency. The algorithm was run on a random tree model~\cite{knuth1975, pearl1980} instead of from a potential game state. We plan to change the algorithm's implementation and use this as a general measurement for performance only. While not implemented against a legitimate chess board, the core negamax algorithm applies just as well to a tree of random leaves.
 We ran on one core of an Intel i7 14700K at depth 8 with seeds 1--5 (Table~\ref{tab:prelim}), and got an average of 325M nodes per second evaluated. In each of our parallelizations, we hope to achieve a parallel speedup greater than 2, though we recognize the challenge of parallelizing alpha-beta implementations due to their inherent sequential nature~\cite{marsland1982}. Regardless, we intend to compare results between approaches to identify the most effective approach to parallelizing alpha-beta implementation.
 
-\begin{table}[t]
+\begin{table}[H]
 \caption{Sequential baseline, 1 thread, depth 8, branching factor 35}
 \label{tab:prelim}
 \centering
@@ -129,13 +129,13 @@ Seed & Nodes & Time \\
 \end{tabular}
 \end{table}
 
-\section{Timeline}
+\section{Milestones}
 
 \begin{itemize}
-\item Weeks 1--2: board, move generation, sequential search, test positions.
-\item Week 3: static and dynamic root splitting.
-\item Weeks 4--5: hybrid work queue, cutoff propagation, tuning $D_{split}$.
-\item Week 6: full measurements and final report.
+\item November 15. We intend to move our sequential search from the random tree onto real chess positions and have both root splitting versions working. Each version will be run repeatedly against the sequential result to check for race conditions. Our first speedup and search overhead results will come from these versions and go into the preliminary report due November 19.
+\item November 30. We plan to have the hybrid implemented on the shared work queue. This includes the abort flag for cancelling sibling tasks after a beta cutoff, which we expect to be the hardest part of the implementation.
+\item December 6. We intend to have every version measured at each thread count and $D_{split}$ chosen for the hybrid.
+\item December 10. We will submit the final report comparing the speedup, efficiency, and search overhead of all four versions.
 \end{itemize}
 
 \bibliographystyle{IEEEtran}
