@@ -7,9 +7,8 @@
 #include <time.h>
 
 #define INF 1000000
-
-static int B;
-static long long nodes;
+static int B;           // branching factor, set once in main from argv, never changes
+static long long nodes; // nodes visited, for the benchmark output
 
 // splitmix64, gives us random looking but deterministic ids/scores
 static uint64_t mix(uint64_t x) {
@@ -19,6 +18,8 @@ static uint64_t mix(uint64_t x) {
     return x ^ (x >> 31);
 }
 
+// tree isnt stored, nodes get generated during the search
+// node = 64 bit id, child i = mix(id + i + 1), leaf score = mix(id) mapped to -1000..1000
 static int negamax(uint64_t id, int depth, int alpha, int beta) {
     nodes++;
     if (depth == 0) return (int)(mix(id) % 2001) - 1000;
