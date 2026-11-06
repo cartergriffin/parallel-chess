@@ -89,7 +89,7 @@ The challenges follow from the dependence of each sibling's window on earlier si
 
 \textbf{Load imbalance and idle time.} Subtree sizes under different root moves vary by orders of magnitude. The first move in a well-ordered list should be the largest~\cite{knuth1975}. Under a static split, one thread can track most of the work while the others finish early and wait at the join. Comparing the different load balancing techniques available (dynamic, static, guided) will yield interesting results.
 
-\textbf{Limited parallelism at the root.} A typical middlegame position has 30 to 40 legal moves~\cite{shannon1950}. Root splitting cannot use more threads than root moves, and in practice it is limited by the largest single subtree. This is the motivation for the hybrid.
+\textbf{Limited parallelism at the root.} A typical chess position has about 30 legal moves~\cite{shannon1950}. Root splitting cannot use more threads than root moves, and in practice it is limited by the largest single subtree. This is the motivation for the hybrid.
 
 \textbf{Synchronization and contention.} Each thread may write to the shared queue and shared $\alpha^{*}$. In the hybrid, task pushes and pops occur at every split node, so the lock on $Q$ is a likely bottleneck. Split depth $D_{split}$ trades task granularity against contention. (add callback to state management discussed in introduction)
 
