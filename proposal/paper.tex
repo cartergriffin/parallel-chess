@@ -43,14 +43,13 @@ A chess engine selects a move by searching the tree of positions reachable from 
 
 The difficulty for parallelism is in lines 5--7. The window $(\alpha, \beta)$ passed to each child depends on the scores of the children searched before it. Searching siblings concurrently means searching them with wider windows than the sequential algorithm would use, and so searching nodes the sequential algorithm would have pruned.
 
-The project builds four versions of the search on a shared core (board representation, move generation, material evaluation):
+Four versions of the search are built on a shared core of board representation, move generation, and material evaluation. The first is Algorithm~\ref{alg:seq} run on one thread, and all speedups are reported relative to it.
 
-\begin{enumerate}
-\item \textbf{Sequential.} Algorithm~\ref{alg:seq}, one thread. All speedups are reported relative to this version.
-\item \textbf{Static root split.} The legal moves at the root are dealt round-robin to $T$ threads before the search begins. Each thread searches its moves with a private $\alpha$. Results are combined after a join.
-\item \textbf{Dynamic root split.} Root moves are placed in a shared FIFO queue. Idle threads take the next move. The best score found so far is shared, so moves taken later are searched with a tighter window (Algorithm~\ref{alg:dyn}).
-\item \textbf{Hybrid.} The work queue of version 3 extended below the root. At a node, the first move is searched by the owning thread alone; once it returns a bound, the remaining moves are pushed to the shared queue as tasks. This follows the Young Brothers Wait Concept~\cite{feldmann1989} and reuses the queue from version 3 instead of a per-node split-point structure (Algorithm~\ref{alg:hyb}).
-\end{enumerate}
+The second splits the root statically. Legal moves at the root are dealt round-robin to $T$ threads before the search begins, each thread searches its moves with a private $\alpha$, and the results are combined after a join.
+
+The third splits the root dynamically. Root moves sit in a shared FIFO queue and an idle thread takes the next one. The best score found so far is shared, so moves taken later are searched with a tighter window (Algorithm~\ref{alg:dyn}).
+
+The fourth is a hybrid that extends the same queue below the root. At a node, the owning thread searches the first move alone; once that move returns a bound, the remaining moves are pushed to the queue as tasks. This follows the Young Brothers Wait Concept~\cite{feldmann1989}, with the shared queue in place of a per-node split-point structure (Algorithm~\ref{alg:hyb}).
 
 \begin{algorithm}[t]
 \caption{Dynamic root split (worker thread)}
@@ -84,19 +83,13 @@ The project builds four versions of the search on a shared core (board represent
 
 \section{Anticipated Challenges}
 
-The challenges follow from the dependence of each sibling's window on earlier siblings, and each version is affected differently.
+Most of the difficulty comes from each sibling's window depending on the siblings before it. A node searched in parallel is searched with less information than in sequential order, so parallel versions search extra nodes. Static splitting has the most of this overhead, since no thread sees another's $\alpha$. Total nodes at $T$ threads divided by sequential nodes measures it.
 
-\textbf{Search overhead.} Any node searched in parallel is searched with less information than in the sequential order. Static splitting has the most of this, since no thread sees another's $\alpha$. The total node count at $T$ threads, divided by the sequential node count, measures this cost directly.
+Subtree sizes under different root moves vary by orders of magnitude, and the first move in a well-ordered list is usually the largest. Under a static split one thread can hold most of the work while the rest finish early and wait at the join. Root splitting is also capped by the number of root moves, typically 30 to 40 in a middlegame, and in practice by the largest single subtree.
 
-\textbf{Load imbalance and idle time.} Subtree sizes under different root moves vary by orders of magnitude. The first move in a well-ordered list is usually the largest. Under a static split, one thread can hold most of the work while the others finish early and wait at the join.
+The shared queue and shared $\alpha^{*}$ are touched by every thread. In the hybrid, pushes and pops happen at every split node, so contention on $Q$ grows with $T$; the split depth $D_{split}$ trades task granularity against that contention. A beta cutoff at one child also makes the remaining sibling tasks useless, and they have to be abandoned through a flag that running threads check, without a lock at every node.
 
-\textbf{Limited parallelism at the root.} A typical middlegame position has 30 to 40 legal moves. Root splitting cannot use more threads than root moves, and in practice it is limited by the largest single subtree. This is the motivation for the hybrid.
-
-\textbf{Synchronization and contention.} The shared queue and shared $\alpha^{*}$ are touched by every thread. In the hybrid, task pushes and pops occur at every split node, so the lock on $Q$ is a likely bottleneck. Split depth $D_{split}$ trades task granularity against contention.
-
-\textbf{Cutoff propagation.} In the hybrid, a beta cutoff at one child makes the remaining sibling tasks useless. Those tasks must be cancelled or abandoned through a flag that running threads check, without adding a lock to every node.
-
-\textbf{Correctness and nondeterminism.} Parallel versions may visit nodes in different orders across runs. Every version must return the same root score as the sequential search at the same depth, which serves as the correctness test.
+Parallel versions visit nodes in different orders from run to run. Each version must still return the same root score as the sequential search at the same depth, and that comparison is the correctness check.
 
 \section{Proposed Solution}
 

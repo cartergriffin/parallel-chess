@@ -32,3 +32,12 @@ Different algorithms will face different challenges. There are several overarchi
 ## Proposal
 
 The project proposal is in `proposal/`, built from the course IEEE template. Build with `make` (or `pdflatex paper && bibtex paper && pdflatex paper && pdflatex paper`) inside that folder; output is `proposal/paper.pdf`.
+
+## Sequential Baseline
+
+`baseline/alphabeta.c` is a single-threaded negamax alpha-beta search over a synthetic game tree: every node has the same number of children, and leaf scores are a hash of the node id, so a given (depth, branching, seed) always produces the same tree. It is the preliminary benchmark for the proposal.
+
+```
+gcc -O2 -o alphabeta baseline/alphabeta.c
+./alphabeta 6 35 1    # depth 6, 35 children per node, seed 1
+```
