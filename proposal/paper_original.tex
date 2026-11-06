@@ -1,0 +1,136 @@
+\documentclass[10pt, conference, compsocconf]{IEEEtran}
+
+\usepackage{amsmath,graphicx}
+\usepackage[noend]{algpseudocode}
+\usepackage{algorithm}
+\usepackage[margin=1in]{geometry}
+
+\begin{document}
+
+\title{Parallel Alpha-Beta Search for Chess:\\ Root Splitting and a Hybrid Work Queue}
+
+\author{\IEEEauthorblockN{Carter Griffin, Luke [Lname], Bryce [Lname]}
+\IEEEauthorblockA{School of Informatics, Computing \& Cyber Systems\\
+Northern Arizona University, Flagstaff, AZ, U.S.A.\\
+\{[id1], [id2], [id3]\}@nau.edu}}
+
+\maketitle
+
+\begin{abstract}
+Alpha-beta pruning makes minimax game-tree search practical, but its pruning depends on bounds produced by earlier siblings, which forces a partial ordering on the search. This project implements a sequential negamax alpha-beta search for chess in C and three pthreads-based parallel variants: static root splitting, dynamic root splitting through a shared FIFO work queue, and a hybrid that extends the work queue below the root in the manner of the Young Brothers Wait Concept. Each variant is measured against the sequential baseline for wall time, nodes searched, and speedup on up to 28 hardware threads.
+\end{abstract}
+
+\section{Project Idea}
+
+A chess engine selects a move by searching the tree of positions reachable from the current one and scoring the leaves with an evaluation function. Minimax search visits every node to a fixed depth. Alpha-beta pruning skips subtrees that cannot change the result, and with good move ordering it searches roughly the square root of the minimax node count~\cite{knuth1975}. Negamax is the same algorithm written with a single maximizing case, using $\max(a,b) = -\min(-a,-b)$ (Algorithm~\ref{alg:seq}).
+
+\begin{algorithm}[t]
+\caption{Sequential negamax with alpha-beta pruning}
+\label{alg:seq}
+\begin{algorithmic}[1]
+\Function{Search}{$p, d, \alpha, \beta$}
+  \If{$d = 0$} \Return \Call{Eval}{$p$} \EndIf
+  \For{$m \in$ \Call{Moves}{$p$}}
+    \State $p' \gets$ \Call{Make}{$p, m$}
+    \State $s \gets -$\Call{Search}{$p', d-1, -\beta, -\alpha$}
+    \If{$s \geq \beta$} \Return $\beta$ \EndIf
+    \State $\alpha \gets \max(\alpha, s)$
+  \EndFor
+  \State \Return $\alpha$
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+The difficulty for parallelism is in lines 5--7. The window $(\alpha, \beta)$ passed to each child depends on the scores of the children searched before it. Searching siblings concurrently means searching them with wider windows than the sequential algorithm would use, and so searching nodes the sequential algorithm would have pruned.
+
+Four versions of the search are built on a shared core of board representation, move generation, and material evaluation. The first is Algorithm~\ref{alg:seq} run on one thread, and all speedups are reported relative to it.
+
+The second splits the root statically. Legal moves at the root are dealt round-robin to $T$ threads before the search begins, each thread searches its moves with a private $\alpha$, and the results are combined after a join.
+
+The third splits the root dynamically. Root moves sit in a shared FIFO queue and an idle thread takes the next one. The best score found so far is shared, so moves taken later are searched with a tighter window (Algorithm~\ref{alg:dyn}).
+
+The fourth is a hybrid that extends the same queue below the root. At a node, the owning thread searches the first move alone; once that move returns a bound, the remaining moves are pushed to the queue as tasks. This follows the Young Brothers Wait Concept~\cite{feldmann1989}, with the shared queue in place of a per-node split-point structure (Algorithm~\ref{alg:hyb}).
+
+\begin{algorithm}[t]
+\caption{Dynamic root split (worker thread)}
+\label{alg:dyn}
+\begin{algorithmic}[1]
+\State shared: queue $Q$ of root moves, score $\alpha^{*}$, lock $L$
+\While{\Call{Pop}{$Q$, $m$}}
+  \State $a \gets \alpha^{*}$
+  \State $p' \gets$ \Call{Make}{$root, m$}
+  \State $s \gets -$\Call{Search}{$p', d-1, -\infty, -a$}
+  \State \Call{Lock}{$L$}; $\alpha^{*} \gets \max(\alpha^{*}, s)$; \Call{Unlock}{$L$}
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{Hybrid split at node $n$ (sketch)}
+\label{alg:hyb}
+\begin{algorithmic}[1]
+\State $s_0 \gets -$\Call{Search}{child $0$ of $n$} \Comment{eldest brother, sequential}
+\State update $n.\alpha$; \textbf{if} cutoff \textbf{then return}
+\If{$n.depth \geq D_{split}$}
+  \State push children $1..k$ of $n$ to $Q$ as tasks
+  \State help process tasks from $Q$ until all children of $n$ finish
+\Else
+  \State search children $1..k$ sequentially
+\EndIf
+\State on any child result $\geq n.\beta$: set $n.abort$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Anticipated Challenges}
+
+Most of the difficulty comes from each sibling's window depending on the siblings before it. A node searched in parallel is searched with less information than in sequential order, so parallel versions search extra nodes. Static splitting has the most of this overhead, since no thread sees another's $\alpha$. Total nodes at $T$ threads divided by sequential nodes measures it.
+
+Subtree sizes under different root moves vary by orders of magnitude, and the first move in a well-ordered list is usually the largest. Under a static split one thread can hold most of the work while the rest finish early and wait at the join. Root splitting is also capped by the number of root moves, typically 30 to 40 in a middlegame, and in practice by the largest single subtree.
+
+The shared queue and shared $\alpha^{*}$ are touched by every thread. In the hybrid, pushes and pops happen at every split node, so contention on $Q$ grows with $T$; the split depth $D_{split}$ trades task granularity against that contention. A beta cutoff at one child also makes the remaining sibling tasks useless, and they have to be abandoned through a flag that running threads check, without a lock at every node.
+
+Parallel versions visit nodes in different orders from run to run. Each version must still return the same root score as the sequential search at the same depth, and that comparison is the correctness check.
+
+\section{Proposed Solution}
+
+The code is written in C with POSIX threads and built with gcc on Ubuntu. Board representation and legal move generation form a fixed core shared by all four versions, and the evaluation is material count only, so that measured differences come from the search and not from the evaluation. Move ordering (captures first) is the same across versions.
+
+Static splitting uses one \texttt{pthread\_create} per thread and a join. Dynamic splitting uses a mutex-protected array queue and a mutex-protected $\alpha^{*}$; a variant reading $\alpha^{*}$ through a C11 atomic is a possible refinement. The hybrid adds a task structure (position, depth, window, parent pointer, abort flag) to the same queue, an atomic counter of outstanding children per split node, and a minimum split depth $D_{split}$ chosen by experiment.
+
+Experiments use a fixed set of test positions in FEN notation, searched to a fixed depth. For each version and $T \in \{1, 2, 4, 8, 16, 28\}$ the measurements are wall time, total nodes, speedup $S_T = t_{seq} / t_T$, efficiency $S_T / T$, and search overhead $N_T / N_{seq}$. Each configuration is run several times and the median is reported.
+
+\section{Preliminary Benchmark}
+
+Table~\ref{tab:prelim} gives sequential search time on one thread for the test positions. [Numbers pending: sequential baseline not yet run.]
+
+\begin{table}[t]
+\caption{Sequential baseline, 1 thread}
+\label{tab:prelim}
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+Position & Depth & Nodes & Time (s) \\
+\hline
+Start position & -- & -- & -- \\
+Middlegame 1 & -- & -- & -- \\
+Middlegame 2 & -- & -- & -- \\
+Endgame & -- & -- & -- \\
+\hline
+\end{tabular}
+\end{table}
+
+[Projection pending: target speedup per version at 16 and 28 threads, stated from the measured sequential times.]
+
+\section{Timeline}
+
+\begin{itemize}
+\item Weeks 1--2: board, move generation, sequential search, test positions.
+\item Week 3: static and dynamic root splitting.
+\item Weeks 4--5: hybrid work queue, cutoff propagation, tuning $D_{split}$.
+\item Week 6: full measurements and final report.
+\end{itemize}
+
+\bibliographystyle{IEEEtran}
+\bibliography{biblio}
+
+\end{document}
