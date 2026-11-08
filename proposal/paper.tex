@@ -6,6 +6,8 @@
 \usepackage[margin=1in]{geometry}
 \raggedbottom
 \usepackage{etoolbox}
+\usepackage{xcolor}
+\newcommand{\rev}[1]{\textcolor{blue}{#1}}
 \AtBeginEnvironment{algorithmic}{\small}
 
 \begin{document}
@@ -19,7 +21,7 @@ Northern Arizona University, Flagstaff, AZ, U.S.A.}}
 \maketitle
 
 \begin{abstract}
-Alpha-beta pruning makes minimax game-tree search practical, but its pruning depends on bounds produced by earlier siblings, which forces a partial ordering on the search. This project intends to compare the effectiveness of several different parallel optimizations for the Alpha-beta pruning algorithm to determine their ability to overcome this sequential limitation. We will implement a sequential negamax alpha-beta search for chess in C and three pthreads-based parallel variants: static root splitting, dynamic root splitting through a shared FIFO work queue, and a hybrid that extends the work queue below the root in the manner of the Young Brothers Wait Concept. Each variant is measured against the sequential baseline for wall time, nodes searched, and speedup on up to 28 hardware threads.
+Alpha-beta pruning makes minimax game-tree search practical, but its pruning depends on bounds produced by earlier siblings, which forces a partial ordering on the search. This project intends to compare the effectiveness of several different parallel optimizations for the Alpha-beta pruning algorithm to determine their ability to overcome this sequential limitation. We will implement a sequential negamax alpha-beta search for chess in C and three pthreads-based parallel variants: static root splitting, dynamic root splitting through a shared FIFO work queue, and a hybrid that extends the work queue below the root in the manner of the Young Brothers Wait Concept. Each variant is measured against the sequential baseline for wall time, nodes searched, and speedup on up to \rev{20 cores}.
 \end{abstract}
 
 \section{Project Idea}
@@ -90,15 +92,15 @@ The challenges follow from the dependence of each sibling's window on earlier si
 
 Any node searched in parallel is searched with less information than in the sequential order. Static splitting has the most of this, since no thread sees another's $\alpha$. The total node count at $T$ threads, divided by the sequential node count, measures this cost directly.
 
-Subtree sizes under different root moves vary by orders of magnitude. The first move in a well-ordered list should be the largest~\cite{knuth1975}. Under a static split, one thread can track most of the work while the others finish early and wait at the join. Comparing the different load balancing techniques available (dynamic, static, guided) will yield interesting results.
+Subtree sizes under different root moves vary by orders of magnitude. The first move in a well-ordered list should be the largest~\cite{knuth1975}. Under a static split, one thread can track most of the work while the others finish early and wait at the join. Comparing the different load balancing techniques available (\rev{dynamic vs. static}) will yield interesting results.
 
 A typical chess position has about 30 legal moves~\cite{shannon1950}. Root splitting cannot use more threads than root moves, and in practice it is limited by the largest single subtree. This is the motivation for the hybrid.
 
-Each thread may write to the shared queue and shared $\alpha^{*}$. In the hybrid, task pushes and pops occur at every split node, so the lock on $Q$ is a likely bottleneck. Split depth $D_{split}$ trades task granularity against contention. (add callback to state management discussed in introduction)
+Each thread may write to the shared queue and shared $\alpha^{*}$. In the hybrid, task pushes and pops occur at every split node, so the lock on $Q$ is a likely bottleneck. Split depth $D_{split}$ trades task granularity against contention.
 
 In the hybrid algorithm, a beta cutoff at one child makes the remaining sibling tasks useless (they are already pruned!). Such tasks must be cancelled or abandoned through a flag that running threads can check. It is important to be cautious of lock overuse while approaching this problem, making it an interesting challenge for implementation.
 
-As with any parallel program, parallel versions of our selected algorithms may visit nodes in different orders across runs. All versions must be tested rigorously for race conditions by running several thousand times each to ensure correctness.
+As with any parallel program, parallel versions of our selected algorithms may visit nodes in different orders across runs. \rev{Race conditions are checked through code review on paper, since any race with a nonzero probability of occurring may not appear in testing. Each implementation is reviewed by another group member, with every access to shared state checked for proper locking. Comparing parallel results against the sequential result serves as a secondary check.}
 
 \section{Proposed Solution}
 
@@ -108,7 +110,9 @@ Our comparison will evaluate the wall execution time for the four different algo
 
 Static splitting uses one \texttt{pthread\_create} per thread and a join. Dynamic splitting uses a mutex-protected array queue and a mutex-protected $\alpha^{*}$; a variant reading $\alpha^{*}$ through a C11 atomic is a possible refinement. The hybrid adds a task structure (position, depth, window, parent pointer, abort flag) to the same queue, an atomic counter of outstanding children per split node, and a minimum split depth $D_{split}$ chosen by experiment.
 
-Experiments use a fixed set of test positions in FEN notation~\cite{edwards1994}, searched to a fixed depth. For each version and $T \in \{1, 2, 4, 8, 16, 28\}$ the measurements are wall time, total nodes, speedup $S_T = t_{seq} / t_T$, efficiency $S_T / T$, and search overhead $N_T / N_{seq}$. Each configuration is run several times and the median is reported.
+Experiments use a fixed set of test positions in FEN notation~\cite{edwards1994}, searched to a fixed depth. For each version and \rev{$T \in \{1, 2, 4, 8, 12, 16, 20\}$} the measurements are wall time, total nodes, speedup $S_T = t_{seq} / t_T$, efficiency $S_T / T$, and search overhead $N_T / N_{seq}$. Each configuration is run several times and \rev{the mean, minimum, and maximum are reported.}
+
+\rev{All experiments are run on the Intel i7 14700K used for the preliminary benchmark. It has 20 physical cores (8 performance and 12 efficiency), so we test up to 20 threads. The efficiency cores are slower than the performance cores, which may cause load imbalance above 8 threads.}
 
 \section{Preliminary Benchmark}
 
@@ -135,9 +139,10 @@ Seed & Nodes & Time \\
 \section{Milestones}
 
 \begin{itemize}
-\item November 15. We intend to move our sequential search from the random tree onto real chess positions and have both root splitting versions working. Each version will be run repeatedly against the sequential result to check for race conditions. Our first speedup and search overhead results will come from these versions and go into the preliminary report due November 19.
-\item November 30. We plan to have the hybrid implemented on the shared work queue. This includes the abort flag for cancelling sibling tasks after a beta cutoff, which we expect to be the hardest part of the implementation (and most interesting).
-\item December 6. We intend to have every version measured at each thread count and $D_{split}$ chosen for the hybrid.
+\item \rev{November 13. We intend to have the sequential search running on real chess positions. All parallel versions will be compared against this version.}
+\item \rev{November 16. We plan to have the static root split implemented and measured at each thread count. Its code will also be reviewed on paper for race conditions. These results will be included in the preliminary report due November 19.}
+\item \rev{November 23. We intend to have the dynamic root split implemented and measured at each thread count. Its code will also be reviewed on paper for race conditions.}
+\item \rev{December 3.} We plan to have the hybrid implemented on the shared work queue. This includes the abort flag for cancelling sibling tasks after a beta cutoff, which we expect to be the hardest part of the implementation (and most interesting). \rev{Its code will also be reviewed on paper for race conditions, and $D_{split}$ will be chosen from its measurements.}
 \item December 10. We will submit the final report comparing the speedup, efficiency, and search overhead of all four versions.
 \end{itemize}
 
